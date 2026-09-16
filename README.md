@@ -1,4 +1,4 @@
-ansible.tf
+ansible.tf:
 ```hcl
 locals {
 
@@ -48,7 +48,7 @@ resource "terraform_data" "ansible_inventory" {
 }
 ```
 
-locals.tf
+locals.tf:
 ```hcl
 locals {
   ssh_public_key = file(pathexpand("~/.ssh/id_.pub"))
@@ -60,7 +60,7 @@ locals {
 }
 ```
 
-main.tf
+main.tf:
 ```hcl
 terraform {
   required_providers {
@@ -79,7 +79,7 @@ provider "yandex" {
 }
 ```
 
-variables.tf
+variables.tf:
 ```hcl
 variable "each_vm" {
   type = list(object({
@@ -148,14 +148,14 @@ variable "vms_ssh_root_key" {
 }
 ```
 
-terraform.tfvars
+terraform.tfvars:
 ```hcl
 cloud_id        = ""
 folder_id       = ""
 default_zone    = ""
 ```
 
-count-vm.tf
+count-vm.tf:
 ```hcl
 resource "yandex_compute_instance" "web" {
   count = 2
@@ -193,7 +193,7 @@ resource "yandex_compute_instance" "web" {
 }
 ```
 
-for_each-vm.tf
+for_each-vm.tf:
 ```hcl
 data "yandex_compute_image" "ubuntu_for_each" {
   family = "ubuntu-2004-lts"
@@ -233,7 +233,7 @@ resource "yandex_compute_instance" "db" {
 }
 ```
 
-disk_vm.tf
+disk_vm.tf:
 ```hcl
 resource "yandex_compute_disk" "extra_disks" {
   count       = 3
@@ -279,7 +279,7 @@ resource "yandex_compute_instance" "storage" {
 }
 ```
 
-inventory.tpl
+inventory.tpl:
 ```hcl
 [webservers]
 %{ for vm in webservers ~}
