@@ -1,110 +1,301 @@
-# Лабораторная работа: Управляющие конструкции в Terraform (Yandex Cloud)
+ansible.tf:
+```hcl
+locals {
 
-**Цель работы:** отработать основные принципы и методы работы с управляющими конструкциями Terraform (`count`, `for_each`, `dynamic`), освоить работу с шаблонизатором Terraform (`templatefile`) и автоматическую генерацию Ansible-инвентаря.
+  webservers = [
+    for vm in yandex_compute_instance.web : {
+      name         = vm.name
+      external_ip  = vm.network_interface[0].nat_ip_address
+      fqdn         = vm.fqdn
+    }
+  ]
 
-**Версия Terraform:** `~> 1.12.0`  
-**Провайдер:** `yandex-cloud/yandex` (версия `>= 0.80.0`), `hashicorp/local` (версия `>= 2.0.0`)
 
----
+  databases = [
+  for vm in yandex_compute_instance.db : {
+    name         = vm.name
+    external_ip  = coalesce(vm.network_interface[0].nat_ip_address, vm.network_interface[0].ip_address)
+    fqdn         = vm.fqdn
+  }
+]
 
-## Чек-лист готовности
 
-- [x] Аккаунт Yandex Cloud зарегистрирован, использован промокод на грант.
-- [x] Установлен Yandex CLI.
-- [x] Исходный код доступен в директории `03/src`.
-- [x] Все ВМ созданы как прерываемые (`preemptible = true`) для экономии средств.
-- [x] Хардкод значений отсутствует: все параметры вынесены в переменные и локальные значения.
+ 
+  storage = [
+    for vm in [yandex_compute_instance.storage] : {
+      name         = vm.name
+      external_ip  = vm.network_interface[0].nat_ip_address
+      fqdn         = vm.fqdn
+    }
+  ]
+}
 
----
+resource "terraform_data" "ansible_inventory" {
+  input = templatefile("inventory.tpl", {
+    webservers = local.webservers
+    databases  = local.databases
+    storage    = local.storage
+  })
 
-## Задание 1. Изучение проекта, исправление ошибок, запуск
-
-### Скриншот входящих правил «Группы безопасности» в ЛК Yandex Cloud
-
-![Группы безопасности в Yandex Cloud](bastion.png)
-
-### Исправление синтаксических ошибок
-
-В исходном коде были намеренно допущены две ошибки:
-
-| № | Где | Суть ошибки | Исправление |
-|---|-----|------------|------------|
-| 1 | `platform_id = "standart-v4"` | Опечатка: `standart` вместо `standard`. Платформы `v4` не существует в Yandex Cloud. | `platform_id = "standard-v1"` |
-| 2 | `cores = 1` (для `standard-v1`) | Для платформы `standard-v1` минимально допустимое количество ядер — 2. YC отклоняет запрос с ошибкой: *the specified number of cores is not available*. | `cores = 2` |
-
-### Команды запуска
-
-```bash
-terraform init -upgrade
-terraform validate
-terraform plan
-terraform apply
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    command     = <<-EOT
+      cat <<'INVENTORY_EOF' > inventory
+      ${self.input}
+      INVENTORY_EOF
+    EOT
+  }
+}
 ```
 
-## Задание 2. Создание ВМ через count и for_each
+locals.tf:
+```hcl
+locals {
+  ssh_public_key = file(pathexpand("~/.ssh/id_.pub"))
 
-![Команда: yc compute instance list](state_list.png)
+  vm_metadata = {
+    serial-port-enable = "1"
+    ssh-keys = "ubuntu:${local.ssh_public_key}"
+  }
+}
+```
 
-![ВМ в Yandex Cloud](BM.png)
+main.tf:
+```hcl
+terraform {
+  required_providers {
+    yandex = {
+      source  = "yandex-cloud/yandex"
+      version = ">= 0.80.0"
+    }
+  }
+}
 
-# Развёрнутая инфраструктура (Yandex Cloud)
+provider "yandex" {
+  service_account_key_file = "key.json"
+  cloud_id                 = var.cloud_id
+  folder_id                = var.folder_id
+  zone                     = var.default_zone
+}
+```
 
-В рамках задания были созданы 4 виртуальные машины в зоне доступности `ru-central1-b`. Все ВМ являются **прерываемыми** (preemptible) с долей vCPU 20%, что снижает стоимость использования для учебных целей.
+variables.tf:
+```hcl
+variable "each_vm" {
+  type = list(object({
+    vm_name     = string
+    cpu         = number
+    ram         = number
+    disk_volume = number
+  }))
+  default = [
+    {
+      vm_name     = "main"
+      cpu         = 2
+      ram         = 2
+      disk_volume = 5
+    },
+    {
+      vm_name     = "replica"
+      cpu         = 4
+      ram         = 4
+      disk_volume = 10
+    }
+  ]
+  description = "Параметры ВМ для баз данных (создаются через for_each)"
+}
 
-## Список ресурсов
+variable "cloud_id" {
+  type        = string
+  default     = ""
+  description = "ID облака"
+}
 
-| Имя ВМ | Статус | Публичный IPv4 | Внутренний IPv4 | RAM | vCPU | Размер диска | Платформа | Тип ВМ |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| `main` | Running | — | `10.0.2.5` | 2 ГБ | 2 | 5 ГБ | Intel Broadwell | Прерываемая (20% vCPU) |
-| `web-1` | Running | `89.169.188.227` | `10.0.2.17` | 1 ГБ | 2 | 5 ГБ | Intel Broadwell | Прерываемая (20% vCPU) |
-| `web-2` | Running | `46.243.211.6` | `10.0.2.8` | 1 ГБ | 2 | 5 ГБ | Intel Broadwell | Прерываемая (20% vCPU) |
-| `replica` | Running | — | `10.0.2.32` | 4 ГБ | 4 | 10 ГБ | Intel Broadwell | Прерываемая (20% vCPU) |
+variable "folder_id" {
+  type        = string
+  default     = ""
+  description = "ID папки"
+}
 
-## Соответствие ресурсам Terraform
+variable "default_zone" {
+  type        = string
+  default     = ""
+  description = "Зона доступности"
+}
 
-| Логическое имя (Terraform) | Имя ВМ в Yandex Cloud | Назначение |
-| :--- | :--- | :--- |
-| `yandex_compute_instance.db["main"]` | `main` | Основная база данных |
-| `yandex_compute_instance.db["replica"]` | `replica` | Реплика базы данных |
-| `yandex_compute_instance.web` | `web-1` | Веб‑сервер №1 |
-| `yandex_compute_instance.web` | `web-2` | Веб‑сервер №2 |
+variable "service_account_key_file" {
+  type        = string
+  default     = "key.json"
+  description = "Путь к ключу сервисного аккаунта"
+}
 
-## Идентификаторы ресурсов (для проверки)
+variable "existing_subnet_id" {
+  type        = string
+  default     = ""
+  description = "ID существующей подсети"
+}
 
-Для подтверждения, что инфраструктура создана именно через Terraform, ниже приведены ID экземпляров:
+variable "security_group_id" {
+  type        = string
+  default     = ""
+  description = "ID группы безопасности"
+}
 
-- `main`: `epd19mp93r6ao1gf7muo`
-- `web-1`: `epdfsvanqtlnql63feqt`
-- `web-2`: `epdhrhaoh6ruirfcj6co`
-- `replica`: `epdpvmsfna8u09f31ivg`
+variable "vms_ssh_root_key" {
+  type        = string
+  default     = "ssh"
+  description = "SSH-ключ"
+}
+```
 
-## Задание 3. Диски и ВМ storage
+terraform.tfvars:
+```hcl
+cloud_id        = ""
+folder_id       = ""
+default_zone    = ""
+```
 
-![Диски и ВМ](disk.png)
+count-vm.tf:
+```hcl
+resource "yandex_compute_instance" "web" {
+  count = 2
 
-В рамках задания были созданы:
-- 3 дополнительных диска по 1 ГБ (`disk-0`, `disk-1`, `disk-2`).
-- Одна ВМ `storage` с подключением всех дисков через `dynamic secondary_disk`.
+  name        = "web-${count.index + 1}"
+  platform_id = "standard-v1"
+  zone        = var.default_zone
 
-### Параметры ВМ
+  depends_on = [yandex_compute_instance.db]
 
-| Параметр | Значение |
-| --- | --- |
-| Имя | `storage` |
-| Зона | `ru-central1-b` |
-| vCPU | 2 |
-| RAM | 2 ГБ |
-| Тип дисков | `network-hdd` |
-| Количество вторичных дисков | 3 |
+  scheduling_policy {
+    preemptible = true
+  }
 
-## Задание 4. Генерация Ansible-инвентаря через Terraform
+  resources {
+    cores         = 2
+    memory        = 1
+    core_fraction = 20
+  }
 
-**Цель задания:**  
-Отработать работу с управляющими конструкциями Terraform, шаблонизатором `templatefile` и встроенными ресурсами. Сгенерировать динамический Ansible-инвентарь (`inventory`) на основе данных о виртуальных машинах в Yandex Cloud.
+  boot_disk {
+    initialize_params {
+      image_id = data.yandex_compute_image.ubuntu_for_each.id
+      size     = 5
+    }
+  }
 
-## Результат выполнения
+  network_interface {
+    subnet_id          = var.existing_subnet_id
+    nat                = true
+    security_group_ids = [var.security_group_id]
+  }
 
-Сгенерирован файл `inventory`, содержащий три группы хостов: `webservers`, `databases`, `storage`.  
-Пример содержимого (актуальные IP и FQDN подставляются автоматически):
+  metadata = local.vm_metadata
+}
+```
 
-![Сгенерированный файл `inventory`](cat_inventory.png)
+for_each-vm.tf:
+```hcl
+data "yandex_compute_image" "ubuntu_for_each" {
+  family = "ubuntu-2004-lts"
+}
+
+resource "yandex_compute_instance" "db" {
+  for_each = { for vm in var.each_vm : vm.vm_name => vm }
+
+  name        = each.value.vm_name
+  platform_id = "standard-v1"
+  zone        = var.default_zone
+
+  scheduling_policy {
+    preemptible = true
+  }
+
+  resources {
+    cores         = each.value.cpu
+    memory        = each.value.ram
+    core_fraction = 20
+  }
+
+  boot_disk {
+    initialize_params {
+      image_id = data.yandex_compute_image.ubuntu_for_each.id
+      size     = each.value.disk_volume
+    }
+  }
+
+  network_interface {
+    subnet_id          = var.existing_subnet_id
+    nat                = false
+    security_group_ids = [var.security_group_id]
+  }
+
+  metadata = local.vm_metadata
+}
+```
+
+disk_vm.tf:
+```hcl
+resource "yandex_compute_disk" "extra_disks" {
+  count       = 3
+  name        = "disk-${count.index}"
+  type        = "network-hdd"
+  zone        = var.default_zone
+  size        = 1
+  description = "Disk for storage VM"
+}
+
+resource "yandex_compute_instance" "storage" {
+  name   = "storage"
+  zone   = var.default_zone
+  platform_id = "standard-v1"
+
+  resources {
+    cores  = 2
+    memory = 2
+  }
+
+  boot_disk {
+    initialize_params {
+      image_id = ""
+    }
+  }
+
+  network_interface {
+    subnet_id         = var.existing_subnet_id
+    nat               = true
+    security_group_ids = [var.security_group_id]
+  }
+
+  dynamic "secondary_disk" {
+    for_each = yandex_compute_disk.extra_disks
+    content {
+      disk_id = secondary_disk.value.id
+    }
+  }
+
+ metadata = {
+    ssh-keys = "yc-user:${file("~/.ssh/id_")}"
+  }
+}
+```
+
+inventory.tpl:
+```hcl
+[webservers]
+%{ for vm in webservers ~}
+${vm.name} ansible_host=${vm.external_ip} fqdn=${vm.fqdn}
+%{ endfor ~}
+
+[databases]
+%{ for vm in databases ~}
+${vm.name} ansible_host=${vm.external_ip} fqdn=${vm.fqdn}
+%{ endfor ~}
+
+[storage]
+%{ for vm in storage ~}
+${vm.name} ansible_host=${vm.external_ip} fqdn=${vm.fqdn}
+%{ endfor ~}
+
+
+
+
