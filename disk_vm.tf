@@ -1,3 +1,7 @@
+data "yandex_compute_image_family" "os" {
+  family = "ubuntu-2404-lts-oslogin"
+}
+
 resource "yandex_compute_disk" "extra_disks" {
   count       = 3
   name        = "disk-${count.index}"
@@ -19,8 +23,7 @@ resource "yandex_compute_instance" "storage" {
 
   boot_disk {
     initialize_params {
-      # Сюда вставь ID, который нашёл в Marketplace (начинается на fd8...)
-      image_id = "fd808st5ai303d6i8f06"
+      image_id = data.yandex_compute_image_family.os.id
     }
   }
 
